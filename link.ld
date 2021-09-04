@@ -20,4 +20,5 @@ SECTIONS
 		*(COMMON)
 		*(.bss)
 	}
+	_ebss = .;
 }

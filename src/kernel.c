@@ -17,6 +17,9 @@ static void* next_free_page;
 // allocate a /physical/ page. we start directly after our kernel has ended
 // (though rounded by one page size), and employ an ostrich-based policy with
 // regards the existence of the memory we're allocating
+//
+// page allocation is a one-way operation. there's no way to deallocate (free)
+// a page once it's allocated.
 void* allocate_page()
 {
 	void* addr = next_free_page;
@@ -24,6 +27,8 @@ void* allocate_page()
 	return addr;
 }
 
+// simple implementation of memset. uses x86 string instructions, but has the
+// same operation as usual memset.
 void memset(void* dst, u8 value, u32 len)
 {
 	asm volatile(
@@ -34,6 +39,8 @@ void memset(void* dst, u8 value, u32 len)
 	);
 }
 
+// simple implementation of memcpy. similar to `memset`, it uses x86 string
+// instructions
 void memcpy(void* dst, const void* src, u32 len)
 {
 	asm volatile(
@@ -49,6 +56,9 @@ void memcpy(void* dst, const void* src, u32 len)
 	);
 }
 
+// write a string to the vga console at the specific position. will NOT bounds
+// check, so if you give a string which will overrun the VGA buffer, it'll just
+// write into whatever follows video memory!
 void vwrite_xy(int x, int y, const char* str)
 {
 	u16* vbuf = VGA_BUFFER + (y * VGA_WIDTH) + x;
@@ -57,6 +67,8 @@ void vwrite_xy(int x, int y, const char* str)
 	}
 }
 
+// clear the entire screen by filling it with empty characters, having a black
+// foreground and a black background
 void vclear()
 {
 	u16* vbuf = VGA_BUFFER;
@@ -65,22 +77,42 @@ void vclear()
 	}
 }
 
+// stop the processor
 __attribute__((noreturn)) static inline void hang()
 {
-	asm("1: cli; hlt; jmp 1b");
+	// this inline asm first disable interrupts. it then halts the processor
+	// in theory it should never get past the hlt, but in the case it does,
+	// we jump straight back to the hlt.
+	asm(
+		"cli\n\t"
+		"1: hlt\n\t"
+		"jmp 1b\n\t"
+	);
+	// we can't possibly reach this point, so mark it as unreachable so that
+	// the compiler doesn't complain
 	__builtin_unreachable();
 }
 
 void setup_paging()
 {
+	// setup the first free page, on the first page boundary after the end
+	// of the bss section
 	next_free_page = (void*)ROUND_PAGE((u32)&_ebss);
 
+	// allocate and zero initialise the page directory, the top level of the
+	// paging structure
 	pgdir = allocate_page();
 	memset(pgdir, 0, sizeof(pgdir));
 
+	// allocate and zero the page table, the second level of the paging
+	// structure. this will be used to identity-map the low 4MiB of address
+	// space (i.e. each physical address will map exactly to virtual
+	// address)
 	struct page_table_entry* low_mem_pt = allocate_page();
 	memset(low_mem_pt, 0, sizeof(low_mem_pt));
 
+	// set the first page table in the page directory to reference the low
+	// memory page table
 	pgdir[0].present = 1;
 	pgdir[0].address = (u32)low_mem_pt >> 12;
 
@@ -103,10 +135,15 @@ void setup_paging()
 
 void map_page(void* phys_addr, void* virtual_addr)
 {
+	// a linear address on x86 is composed of 3 parts, laid out like this:
+	// | page directory (10bits) | page table (10bits) | offset (12bits)
 	u32 pgdir_index = (u32)virtual_addr >> 22;
 	u32 pgtbl_index = ((u32)virtual_addr >> 12) & 0x3ff;
 
 	struct page_table_entry* pte;
+	// if the page directory doesn't contain a mapping for the page table
+	// entry we're concerned with, then we allocate it and set it up. if it
+	// does, then we can extract the address of the entry and use that
 	if (!pgdir[pgdir_index].present) {
 		pte = allocate_page();
 		pgdir[pgdir_index].present = 1;
@@ -115,9 +152,12 @@ void map_page(void* phys_addr, void* virtual_addr)
 		pte = (void*)(pgdir[pgdir_index].address << 12);
 	}
 
+	// setup the entry in the page table that we found/allocated
 	pte[pgtbl_index].present = 1;
 	pte[pgtbl_index].frame = (u32)phys_addr >> 12;
 
+	// finally we need to invalidate the page in the TLB so that no cache
+	// weirdness happens
 	asm volatile("invlpg (%0)" :: "b"(virtual_addr) : "memory");
 }
 

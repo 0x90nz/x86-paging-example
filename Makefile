@@ -16,7 +16,7 @@ $(OBJDIR)/%.o: $(SRCDIR)/%.S
 build_dir:
 	@mkdir -p build
 
-build/kernel.elf: build/multiboot.o build/boot.o build/kernel.o
+build/kernel.elf: build/multiboot.o build/boot.o build/kernel.o build/vga.o build/hexdump.o
 	$(CC) $(CFLAGS) $^ -o $@ -T link.ld
 
 run: build_dir build/kernel.elf

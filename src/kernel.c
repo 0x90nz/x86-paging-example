@@ -1,9 +1,9 @@
 #include "types.h"
 #include "paging.h"
+#include "vga.h"
+#include "hexdump.h"
+#include "va_arg.h"
 
-#define VGA_WIDTH	80
-#define VGA_HEIGHT	25
-#define VGA_BUFFER	((u16*)0xb8000)
 #define ROUND_PAGE(x)	(((x - 1) | 4095) + 1)
 
 extern int _ebss;
@@ -54,27 +54,6 @@ void memcpy(void* dst, const void* src, u32 len)
 		: "S" (src), "D" (dst), "c" (len / 4), "r" (len)
 		: "memory"
 	);
-}
-
-// write a string to the vga console at the specific position. will NOT bounds
-// check, so if you give a string which will overrun the VGA buffer, it'll just
-// write into whatever follows video memory!
-void vwrite_xy(int x, int y, const char* str)
-{
-	u16* vbuf = VGA_BUFFER + (y * VGA_WIDTH) + x;
-	while (*str) {
-		*vbuf++ = *str++ | 0x0200;
-	}
-}
-
-// clear the entire screen by filling it with empty characters, having a black
-// foreground and a black background
-void vclear()
-{
-	u16* vbuf = VGA_BUFFER;
-	for (int i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++) {
-		*vbuf++ = 0;
-	}
 }
 
 // stop the processor
@@ -161,12 +140,50 @@ void map_page(void* phys_addr, void* virtual_addr)
 	asm volatile("invlpg (%0)" :: "b"(virtual_addr) : "memory");
 }
 
+void print_fmt(const char* fmt, ...)
+{
+	va_list args;
+	va_start(args, fmt);
+
+	while (*fmt) {
+		char c = *fmt++;
+		if (c == '$')
+			hexu32(va_arg(args, u32));
+		else
+			vga_putc(c);
+	}
+
+	va_end(args);
+}
+
 void kernel_entry()
 {
-	vclear();
-	vwrite_xy(0, 0, "Good boot.");
+	vga_init();
+	vga_puts("* started.\n");
 	setup_paging();
-	vwrite_xy(0, 1, "Setup paging!");
+	vga_puts("* paging setup\n");
+
+	// get the /physical/ page we want
+	void* pg = allocate_page();
+	print_fmt("* allocated page at: $\n", pg);
+
+	// create two mappings for that page, each at different virtual
+	// addresses
+	void* m1 = (void*)0xc0000000;
+	void* m2 = (void*)0xc1000000;
+
+	print_fmt("* mapping $ to $\n", pg, m1);
+	map_page(pg, m1);
+	print_fmt("* mapping $ to $\n", pg, m2);
+	map_page(pg, m2);
+
+	// set the first mapping to some arbitary sequence
+	print_fmt("* filling $ with 0x41\n", m1);
+	memset(m1, 0x41, 4096);
+
+	// finally dump out the contents, so that we can see they are the same.
+	print_fmt("\ndump of $:\n", m2);
+	hexdump(m2, 128);
 
 	hang();
 }

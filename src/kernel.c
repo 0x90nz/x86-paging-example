@@ -6,17 +6,20 @@
 
 #define ROUND_PAGE(x)	(((x - 1) | 4095) + 1)
 
+// the end of our kernel. after this, the space is all ours to allocate
+// (well assuming there's actually memory there).
 extern int _ebss;
 
 // the page directory
 struct page_directory_entry* pgdir;
 
-// the end of our kernel image, defined in link.ld
+// the next page which is available to use
 static void* next_free_page;
 
 // allocate a /physical/ page. we start directly after our kernel has ended
-// (though rounded by one page size), and employ an ostrich-based policy with
-// regards the existence of the memory we're allocating
+// (though rounded by one page size), and employ an ostrich-based policy as
+// regards the existence of the memory we're allocating. this is a horrendous
+// idea. never actually do this!
 //
 // page allocation is a one-way operation. there's no way to deallocate (free)
 // a page once it's allocated.
@@ -87,6 +90,18 @@ void setup_paging()
 	// structure. this will be used to identity-map the low 4MiB of address
 	// space (i.e. each physical address will map exactly to virtual
 	// address)
+	//
+	// we need to identity map this space because our kernel code is running
+	// at 1MiB. if we were to not map this, then our kernel code wouldn't be
+	// accessible! we also want to use the VGA adapter to write output to
+	// the screen, and this is a memory mapped peripheral (to interact with
+	// it, we just write to memory addresses). it lives at 0xb8000, and so
+	// if this wasn't mapped, we wouldn't be able to access that either.
+	//
+	// most real kernels are meant to run in the "higher half" of memory
+	// (they usually run somewhere around 0xc00000000) and will "pivot"
+	// from an identity mapping to running in their intended address space.
+	// we don't do that here because it would be too complicated.
 	struct page_table_entry* low_mem_pt = allocate_page();
 	memset(low_mem_pt, 0, sizeof(low_mem_pt));
 
@@ -95,7 +110,6 @@ void setup_paging()
 	pgdir[0].present = 1;
 	pgdir[0].address = (u32)low_mem_pt >> 12;
 
-	// identity-map the first 4MiB of memory
 	for (int i = 0; i < 0x400; i++) {
 		low_mem_pt[i].present = 1;
 		low_mem_pt[i].frame = i;
@@ -116,6 +130,14 @@ void map_page(void* phys_addr, void* virtual_addr)
 {
 	// a linear address on x86 is composed of 3 parts, laid out like this:
 	// | page directory (10bits) | page table (10bits) | offset (12bits)
+	// the page directory is the "first level" data structure, and the page
+	// table is the "second level" one.
+	//
+	// to find a physical address from a virtual one, the processor first
+	// looks in the page directory to find the relevant page table. once it
+	// has this, it looks in that page table to find the relevant mapping.
+	// once it has found this, it has the information it needs to access the
+	// memory.
 	u32 pgdir_index = (u32)virtual_addr >> 22;
 	u32 pgtbl_index = ((u32)virtual_addr >> 12) & 0x3ff;
 
@@ -131,7 +153,10 @@ void map_page(void* phys_addr, void* virtual_addr)
 		pte = (void*)(pgdir[pgdir_index].address << 12);
 	}
 
-	// setup the entry in the page table that we found/allocated
+	// setup the entry in the page table that we found/allocated. note how
+	// we shift the physical address right by 12 bits. this is because the
+	// processor uses 4k pages, and so the low order bits would be
+	// irrelevant, so are used for other things in the page table entry.
 	pte[pgtbl_index].present = 1;
 	pte[pgtbl_index].frame = (u32)phys_addr >> 12;
 
@@ -172,6 +197,7 @@ void kernel_entry()
 	void* m1 = (void*)0xc0000000;
 	void* m2 = (void*)0xc1000000;
 
+	// actually create the mappings
 	print_fmt("* mapping $ to $\n", pg, m1);
 	map_page(pg, m1);
 	print_fmt("* mapping $ to $\n", pg, m2);

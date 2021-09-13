@@ -1,4 +1,4 @@
-COMMON_FLAGS=-Wall -m32 -march=i386 -nostdlib -nostdinc -ffreestanding
+COMMON_FLAGS=-Wall -m32 -march=i386 -nostdlib -nostdinc -ffreestanding -fno-stack-protector
 CFLAGS=$(COMMON_FLAGS)
 ASFLAGS=$(COMMON_FLAGS)
 OBJDIR=build

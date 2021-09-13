@@ -84,7 +84,7 @@ void setup_paging()
 	// allocate and zero initialise the page directory, the top level of the
 	// paging structure
 	pgdir = allocate_page();
-	memset(pgdir, 0, sizeof(pgdir));
+	memset(pgdir, 0, sizeof(*pgdir));
 
 	// allocate and zero the page table, the second level of the paging
 	// structure. this will be used to identity-map the low 4MiB of address
@@ -103,7 +103,7 @@ void setup_paging()
 	// from an identity mapping to running in their intended address space.
 	// we don't do that here because it would be too complicated.
 	struct page_table_entry* low_mem_pt = allocate_page();
-	memset(low_mem_pt, 0, sizeof(low_mem_pt));
+	memset(low_mem_pt, 0, sizeof(*low_mem_pt));
 
 	// set the first page table in the page directory to reference the low
 	// memory page table
